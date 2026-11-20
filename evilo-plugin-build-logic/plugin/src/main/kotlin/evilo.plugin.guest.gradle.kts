@@ -1,0 +1,107 @@
+import crow.wasmline.gradle.WasmtimeTarget
+import crow.wasmline.gradle.extensions.WasmlineExtension
+import crow.evilo.plugin.buildlogic.CheckPluginAuthority
+import crow.evilo.plugin.buildlogic.ExportPluginRelease
+import crow.evilo.plugin.buildlogic.GenerateGuestDescriptor
+import crow.evilo.plugin.buildlogic.guestDescriptorJson
+import crow.evilo.plugin.buildlogic.sha256
+import groovy.json.JsonSlurper
+import java.io.File
+import java.util.Properties
+import org.gradle.api.artifacts.VersionCatalogsExtension
+import org.jetbrains.kotlin.gradle.ExperimentalWasmDsl
+import org.jetbrains.kotlin.gradle.tasks.KotlinCompilationTask
+
+plugins {
+    id("evilo.plugin.library")
+    id("io.github.crowforkotlin.wasmline")
+}
+
+// Kotlin DSL accessor generation has no consumer catalog or plugin-spec.json.
+val catalog = extensions.getByType<VersionCatalogsExtension>().find("libs").orElse(null)
+if (catalog != null) {
+    val specFile = layout.projectDirectory.file("plugin-spec.json")
+    val spec = JsonSlurper().parse(specFile.asFile) as Map<*, *>
+    val descriptor = spec["descriptor"] as Map<*, *>
+    val pluginId = descriptor["id"] as String
+    val pluginVersion = descriptor["version"] as String
+    val pluginVersionCode = (descriptor["versionCode"] as Number).toLong()
+    val revision = providers.gradleProperty("plugin.sourceRevision")
+    val authorityDirectory = providers.gradleProperty("evilo.signingKeyDirectory").map { rootProject.file(it) }
+        .orElse(File(providers.systemProperty("user.home").get(), ".evilo/signing"))
+
+    val generatedDescriptor = tasks.register<GenerateGuestDescriptor>("generateGuestDescriptor") {
+        inputSpec.set(specFile)
+        outputDirectory.set(layout.buildDirectory.dir("generated/descriptor"))
+    }
+    val checkAuthority = tasks.register<CheckPluginAuthority>("checkPluginAuthority") {
+        keyPath.set(authorityDirectory.map { it.resolve("private.key").absolutePath })
+        repositoryDirectory.set(rootProject.layout.projectDirectory)
+    }
+    val sourceArchive = tasks.register<Zip>("pluginSourceArchive") {
+        archiveFileName.set("$pluginId-$pluginVersion-sources.zip")
+        destinationDirectory.set(layout.buildDirectory.dir("source-release"))
+        isPreserveFileTimestamps = false
+        isReproducibleFileOrder = true
+        from(rootProject.layout.projectDirectory) {
+            include("**/src/**", "**/plugin-spec.json", "**/build.gradle.kts", "**/settings.gradle.kts")
+            include("gradle/**", "gradlew", "gradlew.bat", "gradle.properties", "docs/**", "**/README.md", "LICENSE", ".gitignore")
+            include("**/icon.png", "**/icon.svg", ".github/**")
+            exclude("**/build/**", "**/.gradle/**", "**/.kotlin/**", "**/.cache/**", "**/.git/**", "**/*.key", "**/*.pem", "**/*.p12", "**/*.pfx", "**/authority.properties", "**/.env*", "**/local.properties")
+        }
+    }
+
+    kotlin {
+        @OptIn(ExperimentalWasmDsl::class)
+        wasmWasi { binaries.library() }
+        sourceSets.commonMain {
+            kotlin.srcDir(generatedDescriptor.flatMap { it.outputDirectory })
+        }
+    }
+    tasks.withType<KotlinCompilationTask<*>>().configureEach { dependsOn(generatedDescriptor) }
+
+    extensions.configure<WasmlineExtension> {
+        manifest {
+            this.pluginId.set(pluginId)
+            version.set(pluginVersion)
+            versionCode.set(pluginVersionCode)
+            displayName.set(descriptor["name"] as String)
+            privateKeyFile.set(layout.file(authorityDirectory.map { it.resolve("private.key") }))
+            publicKeyId.set(authorityDirectory.map { directory ->
+                val metadata = Properties().apply { directory.resolve("authority.properties").inputStream().use(::load) }
+                requireNotNull(metadata.getProperty("keyId")) { "Supply preserved publisher authority.properties; see .github/README.md." }
+            })
+            metadata.put("evilo.descriptor", guestDescriptorJson(spec))
+            metadata.put("evilo.sourceRevision", revision)
+            metadata.put("evilo.sourceArchiveSha256", sourceArchive.flatMap { it.archiveFile }.map { sha256(it.asFile) })
+        }
+        wasmtime {
+            targets = listOf(WasmtimeTarget.PULLEY_32, WasmtimeTarget.PULLEY_64)
+            autoDownload.set(providers.gradleProperty("wasmline.autoDownload").map(String::toBoolean).orElse(false))
+        }
+    }
+    tasks.matching { it.name == "wasmlineAssembleRelease" || it.name == "wasmlineAssembleDebug" }.configureEach {
+        dependsOn(checkAuthority, sourceArchive)
+    }
+    tasks.matching { it.name.startsWith("generateWasmlineManifestKeyPair") }.configureEach {
+        doFirst { error("Release builds require a preserved external publisher identity. They never generate new signing keys.") }
+    }
+
+    tasks.register<ExportPluginRelease>("exportPluginRelease") {
+        group = "evilo"
+        description = "Export signed package, source archive, icon, and catalog using publisher-provided URLs."
+        dependsOn("wasmlineAssembleRelease", sourceArchive)
+        inputSpec.set(specFile)
+        iconFile.set(layout.projectDirectory.file("icon.png"))
+        packageDirectory.set(layout.buildDirectory.dir("wasmline/output/$pluginId-$pluginVersion"))
+        sources.set(sourceArchive.flatMap { it.archiveFile })
+        publicKeyFile.set(layout.file(authorityDirectory.map { it.resolve("public.key") }))
+        authorityMetadataFile.set(layout.file(authorityDirectory.map { it.resolve("authority.properties") }))
+        packageBaseUrl.set(providers.gradleProperty("plugin.releaseBaseUrl"))
+        sourceRepositoryUrl.set(providers.gradleProperty("plugin.sourceUrl"))
+        sourceSnapshotUrl.set(providers.gradleProperty("plugin.sourceSnapshotUrl"))
+        sourceRevision.set(revision)
+        publishedAt.set(providers.gradleProperty("plugin.publishedAt"))
+        outputDirectory.set(layout.buildDirectory.dir("release/$pluginId-$pluginVersion"))
+    }
+}

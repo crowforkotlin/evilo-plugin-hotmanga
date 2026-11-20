@@ -1,0 +1,17 @@
+{
+  "descriptor": {
+    "id": "crow.evilo.source.hotmanga",
+    "name": "HotManga",
+    "version": "1.0.0",
+    "versionCode": 1,
+    "kinds": ["manga"],
+    "languages": ["zh"]
+  },
+  "catalog": {
+    "authors": ["evilo contributors"],
+    "overseas": true,
+    "nsfw": true,
+    "description": "HotManga manga catalog, search, metadata, chapter groups and image pages using the reviewed mapi routes and anonymous browser identity. No login, cartoons, proxy or dynamic domain discovery.",
+    "createdAt": "2026-11-20"
+  }
+}
