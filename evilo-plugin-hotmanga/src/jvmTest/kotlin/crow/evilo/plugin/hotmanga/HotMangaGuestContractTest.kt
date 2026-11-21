@@ -11,7 +11,11 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNotNull
 
-/** Exercises generated guest identity with the core service; does not start a Wasmline host. */
+/**
+ * Exercises generated guest identity on JVM without starting a Wasmline host.
+ * The guest's WASI main requires Wasmline env imports unavailable to plain Node tests;
+ * portable request/parser fixtures run in the core module's WASI suite instead.
+ */
 class HotMangaGuestContractTest {
     @Test
     fun generatedSpecDescribesTheCanonicalMangaProvider() {
