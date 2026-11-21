@@ -88,6 +88,19 @@ class HotMangaPluginTest {
     }
 
     @Test
+    fun freeTypeMetadataPreservesScalarAndStructuredDetailValues() {
+        for ((value, expected) in listOf("1" to "1", "\"1\"" to "1", "{\"name\":\"Free\",\"value\":1}" to "{\"name\":\"Free\",\"value\":1}")) {
+            val operation = PluginOperation(PluginOperationKind.DETAILS, MediaKind.MANGA, item = item)
+            val detail = assertNotNull(resume(operation, start(operation), """{"code":200,"results":{
+                "comic":{"path_word":"example","name":"Example","free_type":$value},
+                "groups":{"default":{"count":1}}}}""").result?.details)
+            assertEquals(expected, detail.extensions["hotmanga.free_type"])
+            val chapters = PluginOperation(PluginOperationKind.CHAPTERS, MediaKind.MANGA, item = detail)
+            assertTrue(assertNotNull(start(chapters).request).url.contains("/group/default/chapters"))
+        }
+    }
+
+    @Test
     fun detailsMapMetadataAndCacheGroupsForFiveMinutes() {
         val operation = PluginOperation(PluginOperationKind.DETAILS, MediaKind.MANGA, item = item)
         val detail = assertNotNull(resume(operation, start(operation), """{"code":"200","results":{
